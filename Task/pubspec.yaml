@@ -1,21 +1,22 @@
 name: danyar_app
 description: A new Flutter project.
-publish_to: 'none'
+publish_to: "none"
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  
+
   # پەکیجەکان لێرەن - دڵنیابە لە شوێنەکەیان
   cupertino_icons: ^1.0.6
   get: ^4.6.6
   get_storage: ^2.1.1
   intl: ^0.19.0
   google_fonts: ^6.1.0
+  http: ^1.1.0
 
 dev_dependencies:
   flutter_test:

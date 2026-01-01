@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:intl/intl.dart';
 import 'dart:math' as math;
+import 'services/api_service.dart';
 
 // =============================================================================
 // 1. TRANSLATIONS
@@ -271,6 +272,15 @@ class Task {
       this.isCompleted = false});
 
   Map<String, dynamic> toJson() => {
+        'title': title,
+        'description': note ?? '',
+        'dueDate': date,
+        'priority': priority?.toLowerCase() ?? 'medium',
+        'category': category ?? 'Personal',
+        'completed': isCompleted ?? false,
+      };
+
+  Map<String, dynamic> toJsonWithId() => {
         'id': id,
         'title': title,
         'note': note,
@@ -279,14 +289,15 @@ class Task {
         'category': category,
         'isCompleted': isCompleted
       };
+
   Task.fromJson(Map<String, dynamic> json) {
-    id = json['id'];
+    id = json['_id'] ?? json['id'];
     title = json['title'];
-    note = json['note'];
-    date = json['date'];
+    note = json['description'] ?? json['note'];
+    date = json['dueDate'] ?? json['date'];
     priority = json['priority'];
     category = json['category'];
-    isCompleted = json['isCompleted'];
+    isCompleted = json['completed'] ?? json['isCompleted'];
   }
 }
 
@@ -307,18 +318,33 @@ class TaskController extends GetxController {
     currentLang.value = box.read('lang') ?? 'en';
     if (box.read('categories') != null)
       categories.assignAll(List<String>.from(box.read('categories')));
-    if (box.read('tasks') != null) {
-      var list = box.read('tasks') as List;
-      taskList.assignAll(list.map((e) => Task.fromJson(e)).toList());
-    }
+    loadTasksFromAPI();
     everAll([taskList, searchText, selectedCategory], (_) => filterTasks());
     filterTasks();
   }
 
+  Future<void> loadTasksFromAPI() async {
+    try {
+      final data = await ApiService.getAllTasks();
+      taskList.assignAll(data.map((e) => Task.fromJson(e)).toList());
+      saveDataLocally();
+    } catch (e) {
+      print('Error loading tasks from API: $e');
+      // Fallback to local storage
+      if (box.read('tasks') != null) {
+        var list = box.read('tasks') as List;
+        taskList.assignAll(list.map((e) => Task.fromJson(e)).toList());
+      }
+    }
+  }
+
   void filterTasks() {
     List<Task> temp = List.from(taskList);
-    if (selectedCategory.value != 'All')
+
+    if (selectedCategory.value != 'All') {
       temp = temp.where((t) => t.category == selectedCategory.value).toList();
+    }
+
     if (searchText.value.isNotEmpty) {
       temp = temp
           .where((t) =>
@@ -335,28 +361,56 @@ class TaskController extends GetxController {
     filteredList.assignAll(temp);
   }
 
-  void addTask(Task task) {
-    task.id = DateTime.now().millisecondsSinceEpoch.toString();
-    taskList.add(task);
-    saveData();
-    Get.back();
-    Get.snackbar("Success", "Task Added",
-        backgroundColor: const Color(0xFFFFD700), colorText: Colors.black);
+  Future<void> addTask(Task task) async {
+    try {
+      final result = await ApiService.createTask(task.toJson());
+      if (result != null) {
+        taskList.add(Task.fromJson(result));
+        saveDataLocally();
+        Get.back();
+        Get.snackbar("Success", "Task Added to Database",
+            backgroundColor: const Color(0xFFFFD700), colorText: Colors.black);
+      } else {
+        Get.snackbar("Error", "Failed to add task",
+            backgroundColor: Colors.red, colorText: Colors.white);
+      }
+    } catch (e) {
+      print('Error adding task: $e');
+      Get.snackbar("Error", "Failed to add task: $e",
+          backgroundColor: Colors.red, colorText: Colors.white);
+    }
   }
 
-  void deleteTask(Task task) {
-    taskList.remove(task);
-    saveData();
-    Get.back();
+  Future<void> deleteTask(Task task) async {
+    try {
+      final success = await ApiService.deleteTask(task.id!);
+      if (success) {
+        taskList.remove(task);
+        saveDataLocally();
+        Get.back();
+        Get.snackbar("Success", "Task Deleted",
+            backgroundColor: const Color(0xFFFFD700), colorText: Colors.black);
+      } else {
+        Get.snackbar("Error", "Failed to delete task",
+            backgroundColor: Colors.red, colorText: Colors.white);
+      }
+    } catch (e) {
+      print('Error deleting task: $e');
+    }
   }
 
-  void toggleComplete(String id) {
-    var index = taskList.indexWhere((t) => t.id == id);
-    if (index != -1) {
-      var task = taskList[index];
-      task.isCompleted = !task.isCompleted!;
-      taskList[index] = task;
-      saveData();
+  Future<void> toggleComplete(String id) async {
+    try {
+      final result = await ApiService.toggleCompletion(id);
+      if (result != null) {
+        var index = taskList.indexWhere((t) => t.id == id);
+        if (index != -1) {
+          taskList[index] = Task.fromJson(result);
+          saveDataLocally();
+        }
+      }
+    } catch (e) {
+      print('Error toggling task: $e');
     }
   }
 
@@ -385,8 +439,8 @@ class TaskController extends GetxController {
     box.write('lang', currentLang.value);
   }
 
-  void saveData() {
-    box.write('tasks', taskList.map((e) => e.toJson()).toList());
+  void saveDataLocally() {
+    box.write('tasks', taskList.map((e) => e.toJsonWithId()).toList());
   }
 }
 
@@ -840,8 +894,18 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
   final _titleCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
   String _priority = 'Low';
-  String _category = 'Work';
+  late String _category;
   DateTime _selectedDate = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize category with first non-'All' category
+    _category = controller.categories.firstWhere(
+      (c) => c != 'All',
+      orElse: () => 'Personal',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -894,18 +958,21 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                           icon: Icons.flag,
                           onChanged: (v) => setState(() => _priority = v!))),
                   const SizedBox(width: 15),
-                  Expanded(
-                      child: Obx(() => _buildDropdown(
-                          label: 'category'.tr,
-                          value: controller.categories.contains(_category)
-                              ? _category
-                              : controller.categories.first,
-                          items: controller.categories
-                              .where((c) => c != 'All')
-                              .toList(),
-                          icon: Icons.category,
-                          onChanged: (v) => setState(() => _category = v!),
-                          isCategory: true))),
+                  Expanded(child: Obx(() {
+                    final availableCategories =
+                        controller.categories.where((c) => c != 'All').toList();
+                    final selectedValue =
+                        availableCategories.contains(_category)
+                            ? _category
+                            : availableCategories.first;
+                    return _buildDropdown(
+                        label: 'category'.tr,
+                        value: selectedValue,
+                        items: availableCategories,
+                        icon: Icons.category,
+                        onChanged: (v) => setState(() => _category = v!),
+                        isCategory: true);
+                  })),
                 ]),
                 const SizedBox(height: 40),
                 SizedBox(
